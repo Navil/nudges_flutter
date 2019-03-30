@@ -60,6 +60,7 @@ flutter:
   assets:
       - assets/logo.png
       - assets/img/default_user.png
+      - assets/img/login_image.jpg
       - secrets.json
 
   # An image asset can refer to one or more resolution-specific "variants", see

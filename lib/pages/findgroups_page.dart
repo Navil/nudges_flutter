@@ -15,18 +15,21 @@ class FindGroupsPage extends StatefulWidget {
   _FindGroupsState createState() => new _FindGroupsState();
 }
 
-class _FindGroupsState extends State<FindGroupsPage> with AutomaticKeepAliveClientMixin<FindGroupsPage>{
+class _FindGroupsState extends State<FindGroupsPage>
+    with AutomaticKeepAliveClientMixin<FindGroupsPage> {
   @override
   bool get wantKeepAlive => UserData.uid != null;
 
   StreamSubscription<LocationData> locationSubscription;
   GoogleMapController mapController;
+  Completer<GoogleMapController> _controller = Completer();
   StreamSubscription<List<Group>> geoSubscription;
   LocationData currentLocation;
   double radius = 10.0;
 
   Marker myMarker;
-  Map<String, Marker> groupMarkers;
+  //Map<String, Marker> groupMarkers;
+  Map<MarkerId, Marker> groupMarkers = <MarkerId, Marker>{};
 
   @override
   initState() {
@@ -34,9 +37,9 @@ class _FindGroupsState extends State<FindGroupsPage> with AutomaticKeepAliveClie
     super.initState();
     print("INITSTATE");
 
-    if(locationSubscription == null){
+    if (locationSubscription == null) {
       print("Starting subscription");
-      locationSubscription = LocationService().locationListener.listen( (data) {
+      locationSubscription = LocationService().locationListener.listen((data) {
         //print("Got Data "+data.toString());
         setState(() {
           this.currentLocation = data;
@@ -54,7 +57,7 @@ class _FindGroupsState extends State<FindGroupsPage> with AutomaticKeepAliveClie
           locationFieldNameInDB: 'geoPoint',
           mapper: (groupDoc) {
             var group = Group.fromSnapshot(groupDoc);
-            print(groupDoc.reference.path+" "+groupDoc.exists.toString());
+            print(groupDoc.reference.path + " " + groupDoc.exists.toString());
             // if you serializer does not pass types like GeoPoint through
             // you have to add that fields manually. If using `jaguar_serializer`
             // add @pass attribute to the GeoPoint field and you can omit this.
@@ -78,31 +81,22 @@ class _FindGroupsState extends State<FindGroupsPage> with AutomaticKeepAliveClie
   }
 
   setupMap() async {
-
     //print("Got Location " + this.currentLocation.toString());
     if (this.groupMarkers == null) {
       this.groupMarkers = new Map();
       this.geoSubscription = this
           .getGroups(Area(this.positionToGeoPoint(), this.radius))
           .listen((data) {
-            print("Received new list with size "+data.length.toString());
+        print("Received new list with size " + data.length.toString());
         data.forEach((group) async {
           print("Got Id: " + group.toString());
           if (this.groupMarkers[group.reference.documentID] == null) {
             print("Adding " + group.reference.documentID);
 
-            this.groupMarkers[group.reference.documentID] = await this
-                .mapController
-                .addMarker(MarkerOptions(
-                    position: LatLng(
-                        group.geoPoint.latitude, group.geoPoint.longitude)));
+            this.groupMarkers[MarkerId(group.reference.documentID)] = new Marker(markerId: MarkerId(group.reference.documentID));
           } else {
             print("Updating " + group.reference.documentID);
-            this.groupMarkers[group.reference.documentID] = await this
-                .mapController
-                .addMarker(MarkerOptions(
-                    position: LatLng(
-                        group.geoPoint.latitude, group.geoPoint.longitude)));
+            this.groupMarkers.update(MarkerId(group.reference.documentID), (value) => new Marker(markerId: MarkerId(group.reference.documentID)));
           }
         });
       }, onDone: () {
@@ -119,38 +113,44 @@ class _FindGroupsState extends State<FindGroupsPage> with AutomaticKeepAliveClie
     super.build(context);
     return Scaffold(
       appBar: AppBar(title: Text('Nearby Groups')),
-      body: Column(
-          children: [
-            SizedBox(height: 5.0),
+      body: Column(children: [
+        SizedBox(height: 5.0),
         Row(children: <Widget>[
-          Expanded(child:
-            Slider(
-              value: this.radius,
-              min: 1.0,
-              max: 50.0,
-              divisions: 49,
-              onChanged: (double newValue) {
-                setState(() {
-                  this.radius = newValue.round().toDouble();
-                });
-              },
-              onChangeEnd: (double newValue) => updateRadius(newValue),)
-          ),Text('${radius.toInt()}' + " km "),
+          Expanded(
+              child: Slider(
+            value: this.radius,
+            min: 1.0,
+            max: 50.0,
+            divisions: 49,
+            onChanged: (double newValue) {
+              setState(() {
+                this.radius = newValue.round().toDouble();
+              });
+            },
+            onChangeEnd: (double newValue) => updateRadius(newValue),
+          )),
+          Text('${radius.toInt()}' + " km "),
         ]),
-        FlatButton(child: Text("Change Location"), onPressed: () {},),
+        FlatButton(
+          child: Text("Change Location"),
+          onPressed: () {},
+        ),
         Expanded(
             child: GoogleMap(
                 onMapCreated: (GoogleMapController controller) =>
                     _onMapCreated(controller),
-                options: GoogleMapOptions(
-                    tiltGesturesEnabled: false, rotateGesturesEnabled: false, myLocationEnabled: true)))
+                initialCameraPosition: CameraPosition(
+                    target: LatLng(
+                        currentLocation.latitude, currentLocation.longitude)),
+              markers: Set<Marker>.of(groupMarkers.values),
+
+            ))
       ]),
     );
   }
 
-
   void updateRadius(double newRadius) async {
-    if (this.myMarker != null) {
+    /*if (this.myMarker != null) {
       this.mapController.updateMarker(
           this.myMarker,
           MarkerOptions(
@@ -164,18 +164,21 @@ class _FindGroupsState extends State<FindGroupsPage> with AutomaticKeepAliveClie
             position: this.positionToLatLng(),
             infoWindowText: InfoWindowText("Hallo", "Hallo Welt"),
           ));
-    }
+    }*/
   }
 
   LatLng positionToLatLng() {
-
-    return (this.currentLocation == null )?null:LatLng(
-        this.currentLocation["latitude"], currentLocation["longitude"]);
+    return (this.currentLocation == null)
+        ? null
+        : LatLng(
+            this.currentLocation.latitude, currentLocation.longitude);
   }
 
   GeoPoint positionToGeoPoint() {
-    return (this.currentLocation == null )?null:GeoPoint(
-        this.currentLocation["latitude"], currentLocation["longitude"]);
+    return (this.currentLocation == null)
+        ? null
+        : GeoPoint(
+            this.currentLocation.latitude, currentLocation.longitude);
   }
 
   void _onMapCreated(GoogleMapController controller) {
@@ -186,7 +189,7 @@ class _FindGroupsState extends State<FindGroupsPage> with AutomaticKeepAliveClie
   }
 
   void updatePosition() {
-    if (this.currentLocation != null && this.currentLocation.isNotEmpty) {
+    if (this.currentLocation != null) {
       this.moveToLocation();
     }
   }
@@ -207,15 +210,12 @@ class _FindGroupsState extends State<FindGroupsPage> with AutomaticKeepAliveClie
   @override
   void dispose() {
     print("DISPOSE");
-    if(locationSubscription != null) {
+    if (locationSubscription != null) {
       locationSubscription.cancel();
       locationSubscription = null;
     }
 
-    this.mapController?.dispose();
-
     this.geoSubscription?.cancel();
     super.dispose();
-
   }
 }
