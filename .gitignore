@@ -17,6 +17,8 @@ secrets.json
 serviceAccount.json
 secrets.xml
 
+node_modules
+
 # IntelliJ related
 *.iml
 *.ipr

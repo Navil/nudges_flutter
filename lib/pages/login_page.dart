@@ -1,9 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_facebook_login/flutter_facebook_login.dart';
 import 'package:intl/intl.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:nudges_flutter/util/NumberTextInputFormatter.dart';
 import 'package:nudges_flutter/util/user_data.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -15,9 +17,10 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
-
-  TextEditingController _smsCodeController = TextEditingController();
-  TextEditingController _phoneNumberController = TextEditingController();
+  bool _isCodeSent = false;
+  final TextEditingController _smsCodeController = TextEditingController();
+  final TextEditingController _phoneNumberController = TextEditingController();
+  final _mobileFormatter = NumberTextInputFormatter();
   String verificationId;
   String errorText;
 
@@ -78,14 +81,14 @@ class _LoginPageState extends State<LoginPage> {
       },
     );
 
-    final number = RaisedButton.icon(
+    final submitNumber = RaisedButton.icon(
       elevation: 4.0,
       color: Theme.of(context).primaryColor,
       icon: new Icon(MdiIcons.send),
-      label: const Text('Send SMS Code'),
+      label: Text(_isCodeSent?"Verfiy Code":'Send SMS Code'),
       textColor: Colors.white,
       onPressed: () {
-        _sendCodeToPhoneNumber();
+        _isCodeSent?authenticateWithNumber(context):_sendCodeToPhoneNumber();
       },
     );
 
@@ -97,6 +100,61 @@ class _LoginPageState extends State<LoginPage> {
       onPressed: () {},
     );
 
+    final numberField = new TextField(
+      decoration: InputDecoration(
+          hintText: "Your Number",
+          labelText: 'Enter your number',
+          labelStyle: TextStyle(fontSize: 15),
+          prefixText: "+ ",
+          prefixStyle: TextStyle(fontSize: 24),
+          icon: Icon(
+            Icons.phone,
+            size: 40,
+            color: Theme.of(context).primaryColor,
+          ),
+          errorText: errorText,
+          errorMaxLines: 2,
+          contentPadding: EdgeInsets.only(bottom: 0)),
+      keyboardType: TextInputType.number,
+        maxLength: 14,
+      style: TextStyle(fontSize: 24),
+      controller: _phoneNumberController,
+        inputFormatters: <TextInputFormatter>[
+          WhitelistingTextInputFormatter.digitsOnly,
+          _mobileFormatter,
+        ]
+    );
+
+    final codeField = new TextField(
+      decoration: InputDecoration(
+          labelText: 'Enter your verification code!',
+          labelStyle: TextStyle(fontSize: 15),
+          icon: Icon(
+            Icons.sms,
+            size: 40,
+            color: Theme.of(context).primaryColor,
+          ),
+          errorText: errorText,
+          errorMaxLines: 2,
+          hintText: "123456",
+          hintStyle: TextStyle(fontSize:24),
+          contentPadding: EdgeInsets.only(bottom: 0),
+          suffixIcon: IconButton(
+              icon: Icon(Icons.cancel),
+              onPressed: () {
+                setState(() {
+                  _isCodeSent = false;
+                  errorText = null;
+                });
+              })
+      ),
+      keyboardType: TextInputType.number,
+      style: TextStyle(fontSize: 24),
+      maxLength: 6,
+      controller: _smsCodeController,
+    );
+
+
     return Scaffold(
         body: Stack(children: [
       Center(
@@ -105,26 +163,11 @@ class _LoginPageState extends State<LoginPage> {
           padding: EdgeInsets.only(left: 24.0, right: 24.0),
           children: <Widget>[
             logo,
-           SizedBox(height: 200),
-           AnimatedPositioned(
-             duration: Duration(seconds:1),
-             child: new TextField(
-                      decoration: InputDecoration(
-                          labelText: 'Enter your number',
-                          labelStyle: TextStyle(fontSize: 15),
-                          icon: Icon(Icons.phone,size: 40, color: Theme.of(context).primaryColor,),
-                          errorText: errorText,
-                          errorMaxLines: 6,
-                          contentPadding: EdgeInsets.only(bottom: 0),
-                          prefixText: "+ ",
-                          prefixStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)
-                      ),
-                      keyboardType: TextInputType.number,
-                      style: TextStyle(fontSize: 20),
-                      controller: _phoneNumberController,
-                    ),
-           ),
-            number,
+            SizedBox(height: 100),
+
+            _isCodeSent?codeField:numberField,
+
+            submitNumber,
             //forgotLabel
           ],
         ),
@@ -160,10 +203,21 @@ class _LoginPageState extends State<LoginPage> {
       verificationId: verificationId,
       smsCode: _smsCodeController.text,
     );
-    final FirebaseUser user =
-        await FirebaseAuth.instance.signInWithCredential(credential);
-    final FirebaseUser currentUser = await FirebaseAuth.instance.currentUser();
-    assert(user.uid == currentUser.uid);
+    try{
+      final FirebaseUser user =
+      await FirebaseAuth.instance.signInWithCredential(credential);
+
+      final FirebaseUser currentUser = await FirebaseAuth.instance.currentUser();
+      assert(user.uid == currentUser.uid);
+
+      errorText = null;
+    }catch(exception){
+      print(exception);
+      setState(() {
+        errorText = "Invalid code";
+      });
+    }
+
   }
 
   Future<void> _sendCodeToPhoneNumber() async {
@@ -175,6 +229,10 @@ class _LoginPageState extends State<LoginPage> {
     final PhoneCodeSent smsCodeSent = (String verId, [int forceCodeResend]) {
       this.verificationId = verId;
       print("SMSCodeSent");
+      setState(() {
+      _isCodeSent = true;
+      errorText = null;
+      });
     };
 
     final PhoneVerificationCompleted verificationSuccess = (FirebaseUser user) {
@@ -183,15 +241,15 @@ class _LoginPageState extends State<LoginPage> {
 
     final PhoneVerificationFailed verificationFailed =
         (AuthException exception) {
-        setState((){
-          this.errorText = "The number is in a wrong format.";
-        });
+      setState(() {
+        this.errorText = "The number is in a wrong format.";
+      });
 
-        print(exception.message);
+      print(exception.message);
     };
 
     await FirebaseAuth.instance.verifyPhoneNumber(
-        phoneNumber: "+"+this._phoneNumberController.text,
+        phoneNumber: "+" + this._phoneNumberController.text,
         codeAutoRetrievalTimeout: autoRetrieve,
         codeSent: smsCodeSent,
         timeout: const Duration(seconds: 5),

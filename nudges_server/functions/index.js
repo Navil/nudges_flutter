@@ -1,30 +1,22 @@
 'use strict';
 const cors = require('cors')({origin: true});
 const express = require('express');
-const bodyParser = require('body-parser');
 
 const functions = require('firebase-functions');
-const gcs = require('@google-cloud/storage')({keyFilename: './serviceAccount.json'});
-const spawn = require('child-process-promise').spawn;
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
-const request = require('request');
+
 const iap = require('in-app-purchase');
 const serviceAccount = require("./serviceAccount.json");
+const config = require('./secrets.json');
 const admin = require('firebase-admin');
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://nudges-d7ccd.firebaseio.com"
+  databaseURL: config.databaseURL
 });
 
-const userRef = admin.database().ref("/user");
-const groupRef = admin.database().ref("/group");
+const userRef = admin.firestore().collection("users");
 const chatRef = admin.database().ref("/chat");
-const defaultBucket = gcs.bucket('nudges-d7ccd.appspot.com');
-
 const nodemailer = require('nodemailer');
-const config = require('./config.json');
+
 
 var transporter = nodemailer.createTransport({
 	service: 'gmail',
@@ -199,335 +191,14 @@ router.post('/validateUpgrade', (req, res) => {
 exports.nudges = functions.https.onRequest(router);
 
 
-exports.notifyOnPrivateMessage = functions.database.ref('/chat/{chatId}/messages/{messageId}').onWrite((change, context) => {
-    if (!change.after.exists()) {
-    return false;
-}
-
-const chatId = context.params.chatId;
-const sender = change.after.val().sender;
-
-return chatRef.child(chatId).child("users").once("value").then(snapshot => {
-    const payload = {
-        data: {
-            title: "nudges",
-            body: "You got a new private message!",
-            "content-available": "1",
-            "image": "assets/img/notification",
-            event: "PRIVATEMESSAGE",
-            userId: sender
-        }
-    };
-
-
-const updatePromises = new Array();
-const messagePromises = new Array();
-//update for every user
-snapshot.forEach(receiver => {
-    if(sender !== receiver.key){ //only triggererd once
-
-    updatePromises.push(userRef.child(sender).child("friends").child(receiver.key).update({lastActivity:change.after.val().timestamp,lastMessage:change.after.val().content,sender:sender}));
-    updatePromises.push(userRef.child(receiver.key).child("friends").child(sender).update({lastActivity:change.after.val().timestamp,lastMessage:change.after.val().content,sender:sender}));
-
-    updatePromises.push(userRef.child(receiver.key).child("data").child("messageToken").once('value').then(token => {
-        //console.log("Sending message to "+receiver.key);
-        if(token.val()){
-        messagePromises.push(admin.messaging().sendToDevice(token.val(), payload));
-    }
-}));
-}
-});
-
-return Promise.all(updatePromises).then(result => {
-    return Promise.all(messagePromises);
-});
-
-});
-});
-
-exports.notifyOnGroupMessage = functions.database.ref('/group/{groupId}/messages/{messageId}').onWrite((change, context) => {
-    if (!change.after.exists()) {
-    return false;
-}
-
-const groupId = context.params.groupId;
-const sender = change.after.val().sender;
-
-return groupRef.child(groupId).child("users").once("value").then(snapshot => {
-    //console.log("1"+JSON.stringify(event.data.val()));
-    const payload = {
-        data: {
-            title: "nudges",
-            body: "You got a new group message!",
-            "content-available": "1",
-            "image": "www/assets/img/logo.png",
-            event: "GROUPMESSAGE",
-            userId: sender
-        }
-    };
-
-const updatePromises = new Array();
-const messagePromises = new Array();
-
-//update for every user
-snapshot.forEach(receiver => {
-
-    updatePromises.push(userRef.child(receiver.key).child("groups").child(groupId).update({lastActivity:change.after.val().timestamp,lastMessage:change.after.val().content,sender:sender}));
-if(sender !== receiver.key){
-    updatePromises.push(userRef.child(receiver.key).child("data").child("messageToken").once('value').then(token => {
-        //console.log("Sending message to "+receiver.key);
-        if(token.val()){
-        messagePromises.push(admin.messaging().sendToDevice(token.val(), payload));
-    }
-}));
-}
-});
-
-return Promise.all(updatePromises).then(() => {
-    return Promise.all(messagePromises);
-});
-});
-});
-
-exports.notifyOnGroupLocationChange = functions.database.ref('/group/{groupId}/data/location').onWrite((change, context) => {
-    if (!change.after.exists() || (change.before.val() === change.after.val())){
-    return false;
-}
-
-const groupId = context.params.groupId;
-
-const payload = {
-    data: {
-        title: "nudges",
-        body: change.before.val().split(",")[0]+" changed to "+change.after.val().split(",")[0]+".",
-        "content-available": "1",
-        "image": "www/assets/img/logo.png",
-        event: "GROUPCHANGE",
-        groupId: groupId
-    }
-};
-
-const informPromises = new Array();
-const messagePromises = new Array();
-
-return groupRef.child(groupId).child("users").once("value").then(snapshot => {
-    //update for every user	+	return admin.messaging().sendToTopic(groupId,payload);
-    snapshot.forEach(receiver => {
-    if(groupId !== receiver.key){
-    informPromises.push(userRef.child(receiver.key).child("data").child("messageToken").once('value').then(token => {
-        //console.log("Sending message to "+receiver.key);
-        if(token.val()){
-        messagePromises.push(admin.messaging().sendToDevice(token.val(), payload));
-    }
-}));
-}
-});
-return Promise.all(informPromises).then(() => {
-    return Promise.all(messagePromises);
-});
-});
-});
-
-exports.createGroupChat = functions.database.ref('/group/{userId}').onCreate((newSnap,context) => {
-    // Only create chat, when the group didn't exist before.
-    const userId = context.params.userId;
-
-if (newSnap.exists()) {
-    const promise1 = userRef.child(userId).child("groups").update({[userId]:
-            {lastActivity: new Date().toISOString(), lastMessage: "Created Group",sender:userId}});
-    const promise2 = groupRef.child(userId).child("users").update({[userId]:new Date().toISOString()});
-    const promise3 = groupRef.child(userId).child("data").update({numFemale:0,numMale:0});
-    return Promise.all([promise1,promise2,promise3]);
-}else{
-    return true;
-}
-});
-
-exports.genderCounter = functions.database.ref('/group/{groupId}/users/{userId}').onWrite((change,context) => {
-    const groupId = context.params.groupId;
-const userId = context.params.userId;
-
-return groupRef.child(groupId).child("data").once("value", data => {
-
-    if(!data.exists())
-return true;
-
-return userRef.child(userId).child("data").child("gender").once("value",gender => {
-    const ref = groupRef.child(groupId).child("data").child(gender.val()=="m"?"numMale":"numFemale");
-
-return ref.transaction(numGender => {
-    if(change.after.val() && !change.before.val())
-return ((numGender || 0) + 1);
-else if(!change.after.val() && change.before.val() && numGender > 0)
-    return numGender - 1;
-else
-    return numGender;
-});
-});
-
-});
-});
-
-exports.reportCounter = functions.database.ref('/user/{userId}/reports/{initiatorId}').onWrite((change,context) => {
-    const userId = context.params.userId;
-
-return userRef.child(userId).child("numReports").once("value",snapshot => {
-    let numReports = snapshot.val();
-if(!numReports)
-    numReports = 0;
-else if(numReports % 1 == 0){
-    var mailOptions = {
-        from: 'report@nudges.at',
-        to: 'office@nudges.at',
-        subject: 'User exceeded report threshold!',
-        text: 'UserId: '+userId+' now has '+snapshot.val()+' reports.'
-    };
-
-    transporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-            console.log(error);
-        }
-    });
-}
-return userRef.child(userId).child("numReports").set(change.after.exists()?numReports+1:numReports-1)
-});
-
-});
-
-exports.deleteGroupChat = functions.database.ref('/group/{userId}').onDelete((oldSnap,context) => {
-    // Only create chat, when the group didn't exist before.
-    const userId = context.params.userId;
-//delete chat when there is no new data
-const promises = new Array();
-oldSnap.child("users").forEach(member => {
-    promises.push(userRef.child(member.key).child("groups").child(userId).remove());
-});
-promises.push(admin.database().ref("/grouplocation").child(userId).remove());
-return Promise.all(promises);
-});
-
-exports.updateThumbnail = functions.database.ref('/user/{userId}/data/images/0').onWrite((change,context) => {
-    const userId = context.params.userId;
-
-if (!change.after.exists() || !change.after.val() || change.after.val() === "") {
-    return userRef.child(userId).child("data").child("thumbnail").remove();
-}else{
-    const uri = change.after.val();
-    let cancel = false;
-
-    userRef.child(userId).child("data").child("thumbnail").set(uri);
-    console.log("Function call done! "+new Date());
-    const fileName = 'temp_thumbnail_'+new Date().getTime()+'.jpeg';
-    const tempFilePath = path.join(os.tmpdir(), fileName);
-    const checkPromise = userRef.child(userId).child("data").child("images").child("0").on("value", newValue => {
-        //console.log("Value changed");
-        if(newValue.val() !== uri){
-        console.log("Aborting, since value changed");
-        userRef.child(userId).child("data").child("images").child("0").off("value",checkPromise);
-        cancel = true;
-        try{
-            fs.unlinkSync(tempFilePath);
-        }catch(err){
-
-        }
-    }
-})
-
-    //Download image
-    // Download file from bucket.
-    const download = function(uri, filename, callback){
-        request.head(uri, function(err, res, body){
-            request(uri).pipe(fs.createWriteStream(tempFilePath)).on('close', callback);
-        });
-    };
-
-    download(uri, fileName , function(){
-        //console.log('done at '+tempFilePath);
-        //Scale the thumbnail
-
-        //console.log("Download done! "+new Date());
-        return spawn('convert', [tempFilePath, '-thumbnail', '100x100>', tempFilePath]).then(()=> {
-            //console.log("Scale done! "+new Date());
-
-            return defaultBucket.upload(tempFilePath,{destination: defaultBucket.file(userId+"/images/thumbnail.jpeg")}).then(data => {
-                //console.log("Upload done! "+new Date());
-                fs.unlinkSync(tempFilePath);
-
-        return data[0].getSignedUrl({
-            action: 'read',
-            expires: '03-09-2491'
-        }).then(signedUrls => {
-            console.log("Thumbnail created! "+new Date());
-        userRef.child(userId).child("data").child("images").child("0").off("value",checkPromise);
-        return userRef.child(userId).child("data").child("thumbnail").set(signedUrls[0]);
-    });
-
-    });
-    },err => {
-            console.error(err)
-            return false;
-        });
-    });
-
-}
-});
-
 exports.setupProfile = functions.auth.user().onCreate(user => {
-    //TODO: Show welcome screen
-    return userRef.child(user.uid).child("data").update({images:{0:"",1:"",2:"",3:""},aboutme:"",accountStatus:0}); //TODO BETA
+    
+    return userRef.doc(user.uid).set({images:{0:"",1:"",2:"",3:""},aboutme:"",accountStatus:0}); 
 });
 
-exports.cleanUp = functions.auth.user().onDelete(user => {
-    //remove user ( + likes, + data)
-    //remove geolocation
-    //remove friends,chats and likes
-    //remove group
-    //remove storage
-    //TODO
-    const userId = user.uid;
-const deletePromises = [];
-
-//Remove friends and chats
-const friendsPromise = userRef.child(userId).child("friends").once("value",friends => {
-    friends.forEach(friend => {
-    const friendId = friend.key;
-//Remove friend
-deletePromises.push(userRef.child(friendId).child("friends").child(userId).remove());
-//Remove chat
-deletePromises.push(chatRef.child(friend.val().chatId).remove())
-//Remove friend from other end
-deletePromises.push(userRef.child(userId).child("friends").child(friendId).remove());
-
-});
-});
-
-//Remove Storage
-//exec("gsutil rm gs://"+bucketName+"/"+userId+"/*", function(error,stdout,stderr){console.error(error)});
-const storagePromise = defaultBucket.deleteFiles({
-    prefix: userId+"/",
-    force: true
-});
-
-//Remove groupmembers + group
-const groupPromise = groupRef.child(userId).child("users").once("value",members => {
-    members.forEach(member => {
-    const memberId = member.key;
-//Remove membership
-deletePromises.push(userRef.child(memberId).child("groups").child(userId).remove());
-});
-//Delete users seperatly, so the tregered function on the server has less work
-deletePromises.push(groupRef.child(userId).child("users").remove());
-deletePromises.push(groupRef.child(userId).remove());
-});
-
-return Promise.all([friendsPromise,groupPromise,storagePromise]).then(()=> {
-    deletePromises.push(userRef.child(userId).remove());
-return Promise.all(deletePromises);
-})
-
-
-//return userRef.child(event.data.uid).child("data").update({images:{image1:"",image2:"",image3:"",image4:""}});
-// ...
+exports.deleteProfile = functions.auth.user().onDelete(user => {
+	user.disabled = true;
+	return userRef.doc(user.uid).delete(); 
 });
 
 exports.updateMembershipsOnGroupChange = functions.firestore.document('groups/{groupId}').onUpdate((change, context) => {
@@ -579,12 +250,7 @@ exports.deleteMembershipsOnGroupChange = functions.firestore.document('groups/{g
         });	
     })
 });
-exports.recursiveDelete = functions
-  .runWith({
-    timeoutSeconds: 540,
-    memory: '2GB'
-  })
-  .https.onCall((data, context) => {
+exports.recursiveDelete = functions.https.onCall((data, context) => {
     // Only allow admin users to execute this function.
 
     const path = data.path;

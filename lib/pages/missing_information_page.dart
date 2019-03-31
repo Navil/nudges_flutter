@@ -29,10 +29,12 @@ class _MissingInformationPageState extends State<MissingInformationPage> {
         .get()
         .then((userData) {
       setState(() {
-        firstnameController.text = userData.data["firstname"];
-        _radioValue = userData.data["gender"].toString()[0].toUpperCase() +
-            userData.data["gender"].toString().substring(1);
-        birthday = userData.data["birthday"];
+        if(userData.exists){
+          firstnameController.text = userData.data["firstname"];
+          _radioValue = userData.data["gender"].toString()[0].toUpperCase() +
+              userData.data["gender"].toString().substring(1);
+          birthday = userData.data["birthday"];
+        }
       });
     });
   }
@@ -56,6 +58,8 @@ class _MissingInformationPageState extends State<MissingInformationPage> {
         currentStep--;
       });
     } else {
+      FirebaseAuth.instance.signOut();
+      /*
       showDialog(
           context: context,
           builder: (BuildContext context) {
@@ -83,6 +87,7 @@ class _MissingInformationPageState extends State<MissingInformationPage> {
               ],
             );
           });
+          */
     }
     return true;
   }
